@@ -1,0 +1,321 @@
+import { useState, useMemo, useEffect, useCallback } from "react";
+import {
+  getTarefas, upsertTarefa, deleteTarefa,
+  getPadroes, upsertPadrao, deletePadrao,
+  getFeriados, upsertFeriado, deleteFeriado,
+  addHistorico, getHistorico,
+} from "./supabase";
+
+// ─── Paleta Hability ──────────────────────────────────────────────────────────
+const C = {
+  primary:"#EF4136", primary2:"#FF6B62", primary3:"#FFAAA6",
+  primary4:"#FFF3F2", primary5:"#FFE0DE", dark:"#7A1A16",
+  green:"#3B6D11", greenBg:"#EAF3DE",
+  red:"#A32D2D", redBg:"#FCEBEB",
+  purple:"#534AB7", gray:"#5F5E5A", navy:"#1B1F3B",
+};
+const CLIENT_COLORS = {
+  "PROAUTO":    { bg:"#E6F1FB", border:"#85B7EB" },
+  "GRUPO IN":   { bg:"#EAF3DE", border:"#97C459" },
+  "METALOCK GR":{ bg:C.primary4, border:C.primary3 },
+  "CAMPOVITA":  { bg:"#EEEDFE", border:"#AFA9EC" },
+  "VANITY":     { bg:"#FAEEDA", border:"#EF9F27" },
+};
+const STATUS_COLORS = {
+  "CONCLUÍDO":   { bg:"#EAF3DE", border:"#639922" },
+  "EM ANÁLISE":  { bg:"#FAEEDA", border:"#BA7517" },
+  "PENDENTE":    { bg:C.primary4, border:C.primary3 },
+  "ENCERRADO":   { bg:"#F1EFE8", border:"#888780" },
+  "NA":          { bg:"#F1EFE8", border:"#888780" },
+  "EM ANDAMENTO":{ bg:C.primary5, border:C.primary2 },
+};
+const AREA_COLORS = { "FOLHA":C.primary, "PÓS FOLHA":C.green, "BENEFICIOS":C.purple };
+const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const DAYS_W = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+const CLIENTES_OPT = ["PROAUTO","GRUPO IN","METALOCK GR","CAMPOVITA","VANITY"];
+const AREAS_OPT   = ["FOLHA","PÓS FOLHA","BENEFICIOS"];
+const CLIENTES_F  = ["Todos",...CLIENTES_OPT];
+const AREAS_F     = ["Todas",...AREAS_OPT];
+const RESP_F      = ["Todos","ANDRESA","ANNE"];
+const STATUS_F    = ["Todos","CONCLUÍDO","EM ANÁLISE","PENDENTE","EM ANDAMENTO","NA","ENCERRADO"];
+
+// ─── Feriados ─────────────────────────────────────────────────────────────────
+function getEaster(y){const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),mo=Math.floor((h+l-7*m+114)/31),day=((h+l-7*m+114)%31)+1;return new Date(y,mo-1,day);}
+function getFeriadosMoveis(y){const e=getEaster(y),add=(d,n)=>new Date(d.getFullYear(),d.getMonth(),d.getDate()+n);return[{data:add(e,-48),nome:"2ª feira de Carnaval"},{data:add(e,-47),nome:"3ª feira de Carnaval"},{data:add(e,-2),nome:"Sexta-feira Santa"},{data:add(e,60),nome:"Corpus Christi"}];}
+function getFeriadosFixos(y){return[{data:new Date(y,0,1),nome:"Confraternização"},{data:new Date(y,3,21),nome:"Tiradentes"},{data:new Date(y,4,1),nome:"Dia do Trabalho"},{data:new Date(y,8,7),nome:"Independência"},{data:new Date(y,9,12),nome:"N. Sra. Aparecida"},{data:new Date(y,10,2),nome:"Finados"},{data:new Date(y,10,15),nome:"Proclamação da República"},{data:new Date(y,11,25),nome:"Natal"}];}
+function isoOf(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function buildHmap(year,custom){const m={};[...getFeriadosFixos(year),...getFeriadosMoveis(year)].forEach(f=>{m[isoOf(f.data)]=f.nome;});custom.forEach(f=>{if(f.data)m[f.data]=f.nome;});return m;}
+function isWe(d){return d.getDay()===0||d.getDay()===6;}
+function isUtil(d,hm){return!isWe(d)&&!hm[isoOf(d)];}
+function ajustar(date,dir,hm){let d=new Date(date.getFullYear(),date.getMonth(),date.getDate());const s=dir==="avancar"?1:-1;d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+s);while(!isUtil(d,hm))d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+s);return d;}
+function getNthUtil(y,m,n,hm){let cnt=0,d=new Date(y,m,1);while(true){if(isUtil(d,hm)){cnt++;if(cnt===n)return d;}d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+1);}}
+function calcData(y,m,tipo,dia,seNaoUtil,hm){let d;if(tipo==="util")d=getNthUtil(y,m,dia,hm);else{const dim=new Date(y,m+1,0).getDate();d=new Date(y,m,Math.min(dia,dim));}if(tipo==="fixo"&&!isUtil(d,hm))d=ajustar(d,seNaoUtil,hm);return d;}
+function toISO(d){return isoOf(d);}
+function fmtDate(s){if(!s)return"-";const[y,m,dd]=s.split("-");return`${dd}/${m}/${y}`;}
+function getDIM(y,m){return new Date(y,m+1,0).getDate();}
+function getFD(y,m){return new Date(y,m,1).getDay();}
+
+// ─── UI base ──────────────────────────────────────────────────────────────────
+function Badge({status}){const c=STATUS_COLORS[status]||STATUS_COLORS["ENCERRADO"];return<span style={{background:c.bg,color:"#000",border:`1px solid ${c.border}`,borderRadius:4,padding:"2px 6px",fontSize:10,fontWeight:600,whiteSpace:"nowrap",display:"inline-block",maxWidth:"100%",overflow:"hidden",textOverflow:"ellipsis"}}>{status}</span>;}
+function AreaBadge({area}){const color=AREA_COLORS[area]||"#888";return<span style={{background:color+"22",color:"#000",border:`1px solid ${color}55`,borderRadius:4,padding:"2px 6px",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}}>{area}</span>;}
+function ClientBadge({cliente}){const c=CLIENT_COLORS[cliente]||{bg:"#eee",border:"#ccc"};return<span style={{background:c.bg,color:"#000",border:`1px solid ${c.border}`,borderRadius:4,padding:"2px 6px",fontSize:10,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"100%",display:"block"}}>{cliente}</span>;}
+
+const inp={border:`0.5px solid ${C.primary3}`,borderRadius:6,padding:"6px 10px",fontSize:13,background:"#fff",color:"#000",width:"100%",boxSizing:"border-box"};
+function Field({label,children}){return<div style={{marginBottom:12}}><label style={{fontSize:12,color:"#000",display:"block",marginBottom:4,fontWeight:500}}>{label}</label>{children}</div>;}
+function BtnP({onClick,disabled,children}){return<button onClick={onClick} disabled={disabled} style={{padding:"7px 18px",borderRadius:7,border:"none",background:disabled?"#ccc":`linear-gradient(135deg,${C.primary},${C.navy})`,color:"#fff",cursor:disabled?"not-allowed":"pointer",fontSize:13,fontWeight:600}}>{children}</button>;}
+function BtnD({onClick,children}){return<button onClick={onClick} style={{padding:"7px 14px",borderRadius:7,border:`0.5px solid ${C.red}`,background:C.redBg,color:"#000",cursor:"pointer",fontSize:13}}>{children}</button>;}
+function BtnG({onClick,children}){return<button onClick={onClick} style={{padding:"7px 14px",borderRadius:7,border:`0.5px solid ${C.primary3}`,background:"transparent",color:C.primary,cursor:"pointer",fontSize:13}}>{children}</button>;}
+
+function Modal({onClose,title,maxW,children}){
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.primary4,borderRadius:14,border:`1.5px solid ${C.primary3}`,padding:0,maxWidth:maxW||490,width:"93%",maxHeight:"92vh",overflowY:"auto",boxSizing:"border-box"}}>
+        <div style={{background:`linear-gradient(135deg,${C.primary},${C.navy})`,borderRadius:"12px 12px 0 0",padding:"13px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontWeight:600,fontSize:14,color:"#fff"}}>{title}</span>
+          <button onClick={onClose} style={{border:"none",background:"rgba(255,255,255,0.2)",cursor:"pointer",fontSize:15,color:"#fff",width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+        </div>
+        <div style={{padding:"18px 20px"}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [view,setView]        = useState("dashboard");
+  const [tasks,setTasks]      = useState([]);
+  const [padrao,setPadrao]    = useState([]);
+  const [feriados,setFeriados]= useState([]);
+  const [loading,setLoading]  = useState(true);
+  const [saving,setSaving]    = useState(false);
+  const [filters,setFilters]  = useState({cliente:"Todos",area:"Todas",responsavel:"Todos",status:"Todos",search:""});
+  const [calMonth,setCalMonth]= useState(new Date().getMonth());
+  const [calYear,setCalYear]  = useState(new Date().getFullYear());
+  const [modalCal,setModalCal]= useState(null);
+  const [editTask,setEditTask]= useState(null);
+  const [showAdd,setShowAdd]  = useState(false);
+  const [newTask,setNewTask]  = useState({atividade:"",cliente:"PROAUTO",area:"FOLHA",status:"PENDENTE",obs:"",dataEstimada:"",dataExecucao:"",responsavel:""});
+  const [showGerar,setShowGerar]        = useState(false);
+  const [gerarPreview,setGerarPreview]  = useState([]);
+  const [gerarMes,setGerarMes]          = useState(null);
+  const [editPadrao,setEditPadrao]      = useState(null);
+  const [showAddPadrao,setShowAddPadrao]= useState(false);
+  const [newPadrao,setNewPadrao]        = useState({atividade:"",cliente:"PROAUTO",area:"FOLHA",responsavel:"",tipoPrazo:"fixo",dia:1,seNaoUtil:"recuar"});
+  const [padraoFiltro,setPadraoFiltro]  = useState("Todos");
+  const [showFeriados,setShowFeriados]  = useState(false);
+  const [newFeriado,setNewFeriado]      = useState({data:"",nome:""});
+  const [editFeriado,setEditFeriado]    = useState(null);
+  const [editCalTask,setEditCalTask]    = useState(null);
+  const [showHistorico,setShowHistorico]= useState(null);
+  const [historico,setHistorico]        = useState([]);
+  const [showEscolhaMes,setShowEscolhaMes] = useState(false);
+  const [escolhaMes,setEscolhaMes]      = useState(()=>{const n=new Date();let m=n.getMonth()+1,y=n.getFullYear();if(m>11){m=0;y++;}return`${y}-${String(m+1).padStart(2,"0")}`;});
+
+  // ── Carregamento inicial ───────────────────────────────────────────────────
+  useEffect(()=>{
+    async function load(){
+      setLoading(true);
+      try {
+        const [t,p,f] = await Promise.all([getTarefas(),getPadroes(),getFeriados()]);
+        setTasks(t); setPadrao(p); setFeriados(f);
+      } catch(e){ alert("Erro ao carregar dados: "+e.message); }
+      setLoading(false);
+    }
+    load();
+  },[]);
+
+  const hmap = useMemo(()=>buildHmap(calYear,feriados),[calYear,feriados]);
+
+  const filtered = useMemo(()=>tasks.filter(t=>{
+    if(filters.cliente!=="Todos"&&t.cliente!==filters.cliente)return false;
+    if(filters.area!=="Todas"&&t.area!==filters.area)return false;
+    if(filters.responsavel!=="Todos"&&t.responsavel!==filters.responsavel)return false;
+    if(filters.status!=="Todos"&&t.status!==filters.status)return false;
+    if(filters.search&&!t.atividade.toLowerCase().includes(filters.search.toLowerCase())&&!t.cliente.toLowerCase().includes(filters.search.toLowerCase()))return false;
+    return true;
+  }),[tasks,filters]);
+
+  const stats = useMemo(()=>({
+    total:tasks.length,
+    concluido:tasks.filter(t=>t.status==="CONCLUÍDO").length,
+    analise:tasks.filter(t=>t.status==="EM ANÁLISE").length,
+    pendente:tasks.filter(t=>["PENDENTE","EM ANDAMENTO"].includes(t.status)).length,
+    na:tasks.filter(t=>t.status==="NA").length,
+  }),[tasks]);
+  const pct = stats.total?Math.round((stats.concluido/stats.total)*100):0;
+
+  const calTasks = useMemo(()=>{
+    const map={};
+    tasks.forEach(t=>{
+      if(!t.dataEstimada)return;
+      const[y,m,d]=t.dataEstimada.split("-").map(Number);
+      if(m-1===calMonth&&y===calYear){if(!map[d])map[d]=[];map[d].push(t);}
+    });
+    return map;
+  },[tasks,calMonth,calYear]);
+
+  // ── CRUD Tarefas ──────────────────────────────────────────────────────────
+  async function saveEdit(){
+    setSaving(true);
+    try{
+      // registrar histórico das alterações
+      const original = tasks.find(t=>t.id===editTask.id);
+      const campos = ["status","responsavel","dataExecucao","obs"];
+      for(const c of campos){
+        if(original[c]!==editTask[c]){
+          await addHistorico(editTask.id,c,original[c],editTask[c]);
+        }
+      }
+      const updated = await upsertTarefa(editTask);
+      setTasks(tasks.map(t=>t.id===updated.id?updated:t));
+      setEditTask(null);
+    }catch(e){alert("Erro ao salvar: "+e.message);}
+    setSaving(false);
+  }
+
+  async function handleDeleteTask(id){
+    setSaving(true);
+    try{ await deleteTarefa(id); setTasks(tasks.filter(t=>t.id!==id)); setEditTask(null); }
+    catch(e){alert("Erro ao excluir: "+e.message);}
+    setSaving(false);
+  }
+
+  async function addTask(){
+    setSaving(true);
+    try{ const t=await upsertTarefa(newTask); setTasks([...tasks,t]); setShowAdd(false); setNewTask({atividade:"",cliente:"PROAUTO",area:"FOLHA",status:"PENDENTE",obs:"",dataEstimada:"",dataExecucao:"",responsavel:""}); }
+    catch(e){alert("Erro ao adicionar: "+e.message);}
+    setSaving(false);
+  }
+
+  async function saveCalTask(){
+    setSaving(true);
+    try{
+      const original=tasks.find(t=>t.id===editCalTask.id);
+      for(const c of ["status","responsavel","dataExecucao"]){
+        if(original[c]!==editCalTask[c]) await addHistorico(editCalTask.id,c,original[c],editCalTask[c]);
+      }
+      const updated=await upsertTarefa(editCalTask);
+      setTasks(tasks.map(t=>t.id===updated.id?updated:t));
+      setEditCalTask(null);
+    }catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+
+  // ── CRUD Padrões ──────────────────────────────────────────────────────────
+  async function savePadrao(){
+    setSaving(true);
+    try{ const p=await upsertPadrao(editPadrao); setPadrao(padrao.map(x=>x.id===p.id?p:x)); setEditPadrao(null); }
+    catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+  async function handleDeletePadrao(id){
+    setSaving(true);
+    try{ await deletePadrao(id); setPadrao(padrao.filter(p=>p.id!==id)); setEditPadrao(null); }
+    catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+  async function addPadrao(){
+    setSaving(true);
+    try{ const p=await upsertPadrao(newPadrao); setPadrao([...padrao,p]); setShowAddPadrao(false); setNewPadrao({atividade:"",cliente:"PROAUTO",area:"FOLHA",responsavel:"",tipoPrazo:"fixo",dia:1,seNaoUtil:"recuar"}); }
+    catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+
+  // ── CRUD Feriados ─────────────────────────────────────────────────────────
+  async function addFeriado(){
+    if(!newFeriado.data||!newFeriado.nome)return;
+    setSaving(true);
+    try{ const f=await upsertFeriado(newFeriado); setFeriados([...feriados,f]); setNewFeriado({data:"",nome:""}); }
+    catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+  async function handleDeleteFeriado(id){
+    setSaving(true);
+    try{ await deleteFeriado(id); setFeriados(feriados.filter(f=>f.id!==id)); setEditFeriado(null); }
+    catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+  async function saveFeriado(){
+    setSaving(true);
+    try{ const f=await upsertFeriado(editFeriado); setFeriados(feriados.map(x=>x.id===f.id?f:x)); setEditFeriado(null); }
+    catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+
+  // ── Gerar mês ─────────────────────────────────────────────────────────────
+  function handleGerarPreview(){
+    const[yStr,mStr]=escolhaMes.split("-");
+    const ny=Number(yStr),nm=Number(mStr)-1;
+    const hm=buildHmap(ny,feriados);
+    setGerarMes({mes:nm,ano:ny});
+    const preview=padrao.map((p,i)=>{
+      const d=calcData(ny,nm,p.tipoPrazo,p.dia,p.seNaoUtil,hm);
+      const iso=toISO(d);
+      const orig=new Date(ny,nm,Math.min(p.dia,getDIM(ny,nm)));
+      return{...p,dataEstimada:iso,dataExecucao:"",status:"PENDENTE",responsavel:"",adjusted:iso!==toISO(orig),_i:i};
+    });
+    setGerarPreview(preview);setShowGerar(true);
+  }
+
+  async function handleConfirmarGerar(){
+    setSaving(true);
+    try{
+      const novas=await Promise.all(gerarPreview.map(p=>upsertTarefa({atividade:p.atividade,cliente:p.cliente,area:p.area,status:"PENDENTE",obs:"",dataEstimada:p.dataEstimada,dataExecucao:"",responsavel:""})));
+      setTasks([...tasks,...novas]);
+      setShowGerar(false);setView("tarefas");
+    }catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+
+  // ── Histórico ─────────────────────────────────────────────────────────────
+  async function abrirHistorico(tarefa){
+    setShowHistorico(tarefa);
+    try{ const h=await getHistorico(tarefa.id); setHistorico(h); }
+    catch(e){ setHistorico([]); }
+  }
+
+  const padraoFiltrado = padraoFiltro==="Todos"?padrao:padrao.filter(p=>p.cliente===padraoFiltro);
+  const navBtn = (v)=>{const act=view===v;return<button key={v} onClick={()=>setView(v)} style={{padding:"6px 14px",fontSize:13,borderRadius:7,border:`1.5px solid ${act?C.primary:"rgba(255,255,255,0.3)"}`,background:act?C.primary:"transparent",color:"#fff",cursor:"pointer",fontWeight:act?600:400}}>{v==="dashboard"?"Dashboard":v==="calendario"?"Calendário":v==="tarefas"?"Tarefas":"Padrões"}</button>;};
+  const thS = {textAlign:"left",padding:"9px 10px",fontWeight:600,fontSize:11,color:"#000",whiteSpace:"nowrap",borderBottom:`2px solid ${C.primary3}`};
+  const tdS = (idx)=>({borderBottom:"0.5px solid #eee",background:idx%2===0?"#fff":"#fafafa"});
+
+  function TF(obj,set){return<>
+    {[{l:"Atividade",k:"atividade",t:"text"},{l:"Observação",k:"obs",t:"text"},{l:"Data estimada",k:"dataEstimada",t:"date"},{l:"Data de execução",k:"dataExecucao",t:"date"}].map(f=><Field key={f.k} label={f.l}><input type={f.t} value={obj[f.k]} onChange={e=>set({...obj,[f.k]:e.target.value})} style={inp}/></Field>)}
+    {[{l:"Status",k:"status",opts:["CONCLUÍDO","EM ANÁLISE","PENDENTE","EM ANDAMENTO","NA","ENCERRADO"]},{l:"Área",k:"area",opts:AREAS_OPT},{l:"Responsável",k:"responsavel",opts:["","ANDRESA","ANNE"]},{l:"Cliente",k:"cliente",opts:CLIENTES_OPT}].map(f=><Field key={f.k} label={f.l}><select value={obj[f.k]} onChange={e=>set({...obj,[f.k]:e.target.value})} style={inp}>{f.opts.map(o=><option key={o}>{o}</option>)}</select></Field>)}
+  </>;}
+
+  function PF(obj,set){return<>
+    <Field label="Atividade"><input value={obj.atividade} onChange={e=>set({...obj,atividade:e.target.value})} style={inp}/></Field>
+    {[{l:"Cliente",k:"cliente",opts:CLIENTES_OPT},{l:"Área",k:"area",opts:AREAS_OPT},{l:"Responsável",k:"responsavel",opts:["","ANDRESA","ANNE"]}].map(f=><Field key={f.k} label={f.l}><select value={obj[f.k]} onChange={e=>set({...obj,[f.k]:e.target.value})} style={inp}>{f.opts.map(o=><option key={o}>{o}</option>)}</select></Field>)}
+    <Field label="Tipo de prazo"><select value={obj.tipoPrazo} onChange={e=>set({...obj,tipoPrazo:e.target.value})} style={inp}><option value="fixo">Dia fixo do mês</option><option value="util">Nº do dia útil</option></select></Field>
+    <Field label={obj.tipoPrazo==="util"?"Qual dia útil?":"Dia do mês"}><input type="number" min="1" max={obj.tipoPrazo==="util"?22:31} value={obj.dia} onChange={e=>set({...obj,dia:Number(e.target.value)})} style={inp}/></Field>
+    <Field label="Se cair em feriado / fim de semana"><select value={obj.seNaoUtil} onChange={e=>set({...obj,seNaoUtil:e.target.value})} style={inp}><option value="recuar">↩ Recuar para o dia útil anterior</option><option value="avancar">↪ Avançar para o próximo dia útil</option></select></Field>
+  </>;}
+
+  if(loading) return<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",flexDirection:"column",gap:16,background:C.primary4}}><div style={{width:48,height:48,border:`4px solid ${C.primary3}`,borderTopColor:C.primary,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/><div style={{color:C.primary,fontWeight:600}}>Carregando dados...</div><style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style></div>;
+
+  return(
+    <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#000",paddingBottom:"2rem",minHeight:"100vh"}}>
+      {saving&&<div style={{position:"fixed",top:0,left:0,right:0,height:3,background:C.primary,zIndex:200,animation:"prog 1s ease-in-out infinite"}}/>}
+      <style>{`@keyframes prog{0%{width:0%}100%{width:100%}}`}</style>
+
+      {/* Header */}
+      <div style={{padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",background:C.navy}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:36,height:36,borderRadius:8,background:C.primary,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{color:"#fff",fontSize:15,fontWeight:700}}>H</span></div>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,color:"#fff"}}>Hability · BPO Trabalhista</div>
+            <div style={{fontSize:11,color:C.primary3}}>Controle de serviços e prazos</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          {["dashboard","calendario","tarefas","padrao"].map(navBtn)}
+          <button onClick={()=>setShowFeriados(true)} style={{padding:"6px 12px",fontSize:13,borderRadius:7,border:`1.5px solid ${C.primary3}`,background:"transparent",color:"#fff",cursor:"pointer"}}>📅 Feriados</button>
+          <button onClick={()=>setShowEscolhaMes(true)} style={{padding:"6px 16px",fontSize:13,borderRadius:7,border:"none",background:C.primary,color:"#fff",cursor:"pointer",fontWeight:600}}>✦ Gerar mês</button>
+        </div>
+      </div>
+
+      {/* Dashboard */}
+      {view==="dashboard"&&<div style={{padding:"20px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:12,marginBottom:24}}>
+          {[{l:"Total",v:stats.total,c:C.primary},{l:"Concluídas",v:stats.concluido,c:C.green},{l:"Em análise",v:stats.analise,c:C.gray},{l:"Pendentes",v:stats.pendente,c:C.primary},{l:"N/A",v:stats.na,c:C.gray}].map(s=><div key={s.l} style={{background:C.primary4,borderRadius:10,padding:"14px 16px",border:`1px solid ${C.primary5}`}}><div style={{fontSize:12,color:
