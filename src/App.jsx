@@ -523,4 +523,4 @@ export default function App() {
       {showAddPadrao&&<Modal onClose={()=>setShowAddPadrao(false)} title="Novo padrão de prazo">{PF(newPadrao,setNewPadrao)}<div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}><BtnP onClick={addPadrao} disabled={!newPadrao.atividade}>Adicionar</BtnP></div></Modal>}
     </div>
   );
-}
+}  
