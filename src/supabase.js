@@ -167,6 +167,7 @@ function mapPadrao(r) {
     responsavel: r.responsavel ?? '', tipoPrazo: r.tipo_prazo, dia: r.dia,
     seNaoUtil: r.se_nao_util, tipo: r.tipo ?? 'mensal',
     recorrenciaAnual: r.recorrencia_anual ?? false,
+    mes: r.mes ?? null,
   }
 }
 function unmapPadrao(p) {
@@ -175,6 +176,7 @@ function unmapPadrao(p) {
     responsavel: p.responsavel ?? '', tipo_prazo: p.tipoPrazo, dia: p.dia,
     se_nao_util: p.seNaoUtil, tipo: p.tipo ?? 'mensal',
     recorrencia_anual: p.recorrenciaAnual ?? false,
+    mes: p.mes ?? null,
   }
   if (p.id) row.id = p.id
   return row
