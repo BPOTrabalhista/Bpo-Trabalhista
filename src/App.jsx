@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import * as XLSX from 'xlsx';
 import {
   getTarefas, upsertTarefa, deleteTarefa, deleteTarefasEmLote,
