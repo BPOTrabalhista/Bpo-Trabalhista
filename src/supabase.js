@@ -64,6 +64,16 @@ export async function deletePadrao(id) {
   const { error } = await supabase.from('padroes').delete().eq('id', id)
   if (error) throw error
 }
+export async function deletePadraoEmLote(ids) {
+  const { error } = await supabase.from('padroes').delete().in('id', ids)
+  if (error) throw error
+}
+export async function insertPadraoEmLote(lista) {
+  const rows = lista.map(p => unmapPadrao(p))
+  const { data, error } = await supabase.from('padroes').insert(rows).select()
+  if (error) throw error
+  return data.map(mapPadrao)
+}
 
 // ─── Feriados ─────────────────────────────────────────────────────────────────
 export async function getFeriados() {
