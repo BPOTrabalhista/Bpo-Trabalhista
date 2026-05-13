@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import * as XLSX from 'xlsx';
 import {
   getTarefas, upsertTarefa, deleteTarefa, deleteTarefasEmLote,
   getPadroes, upsertPadrao, deletePadrao, deletePadraoEmLote, insertPadraoEmLote,
@@ -120,7 +121,9 @@ export default function App(){
   const [gerarAnualAno,setGerarAnualAno]         = useState(null);
   const [editPadrao,setEditPadrao]       = useState(null);
   const [showAddPadrao,setShowAddPadrao] = useState(false);
-  const [newPadrao,setNewPadrao]         = useState({atividade:"",cliente:"",area:"",responsavel:"",tipoPrazo:"fixo",dia:1,seNaoUtil:"recuar",tipo:"mensal",recorrenciaAnual:false,mes:null});
+  const [newPadrao,setNewPadrao] = useState({atividade:"",cliente:"",area:"",responsavel:"",tipoPrazo:"fixo",dia:1,seNaoUtil:"recuar",tipo:"mensal",recorrenciaAnual:false,mes:null});
+  const [replicarTodos,setReplicarTodos] = useState(false);
+  const fileInputRef = useRef(null);
   const [padraoFiltro,setPadraoFiltro]  = useState("Todos");
   const [padraoTipoFiltro,setPadraoTipoFiltro] = useState("Todos");
   const [selectedPadrao,setSelectedPadrao] = useState([]);
@@ -189,7 +192,72 @@ export default function App(){
 
   async function savePadrao(){setSaving(true);try{const p=await upsertPadrao(editPadrao);setPadrao(padrao.map(x=>x.id===p.id?p:x));setEditPadrao(null);}catch(e){alert("Erro: "+e.message);}setSaving(false);}
   async function handleDeletePadrao(id){setSaving(true);try{await deletePadrao(id);setPadrao(padrao.filter(p=>p.id!==id));setEditPadrao(null);}catch(e){alert("Erro: "+e.message);}setSaving(false);}
-  async function addPadrao(){setSaving(true);try{const p=await upsertPadrao(newPadrao);setPadrao([...padrao,p]);setShowAddPadrao(false);setNewPadrao({atividade:"",cliente:"",area:"",responsavel:"",tipoPrazo:"fixo",dia:1,seNaoUtil:"recuar",tipo:"mensal",recorrenciaAnual:false,mes:null});}catch(e){alert("Erro: "+e.message);}setSaving(false);}
+  async function addPadrao(){
+    setSaving(true);
+    try{
+      if(replicarTodos && nomes.clientes.length > 0){
+        // cria um padrão para cada cliente, responsável em branco
+        const lista = nomes.clientes.map(cli=>({...newPadrao, cliente: cli, responsavel:""}));
+        const novos = await insertPadraoEmLote(lista);
+        setPadrao([...padrao,...novos]);
+        alert(`✅ ${novos.length} padrão(ões) criados para todos os clientes!`);
+      } else {
+        const p = await upsertPadrao(newPadrao);
+        setPadrao([...padrao,p]);
+      }
+      setShowAddPadrao(false);
+      setReplicarTodos(false);
+      setNewPadrao({atividade:"",cliente:"",area:"",responsavel:"",tipoPrazo:"fixo",dia:1,seNaoUtil:"recuar",tipo:"mensal",recorrenciaAnual:false,mes:null});
+    }catch(e){alert("Erro: "+e.message);}
+    setSaving(false);
+  }
+
+  // ── Baixar modelo Excel ───────────────────────────────────────────────────
+  function baixarModeloExcel(){
+    const cabecalho = [["Atividade","Cliente","Área","Responsável","Tipo (mensal/anual)","Tipo Prazo (fixo/util)","Dia","Mês (1-12, só anual)","Se Não Útil (recuar/avancar)","Recorrência Anual (sim/nao)"]];
+    const exemplos = [
+      ["Calculo de adiantamento","PROAUTO","FOLHA","","mensal","fixo",10,"","recuar","nao"],
+      ["Folha de 13º Salário","GRUPO IN","FOLHA","","anual","fixo",20,11,"recuar","sim"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([...cabecalho,...exemplos]);
+    ws['!cols'] = Array(10).fill({wch:22});
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Padrões");
+    XLSX.writeFile(wb, "modelo_padroes_bpo.xlsx");
+  }
+
+  // ── Importar Excel ────────────────────────────────────────────────────────
+  async function handleImportarExcel(e){
+    const file = e.target.files[0];
+    if(!file) return;
+    try{
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+      // pular cabeçalho (linha 0)
+      const dados = rows.slice(1).filter(r=>r[0]&&r[1]&&r[2]);
+      if(!dados.length){ alert("Nenhuma linha válida encontrada. Verifique o arquivo."); return; }
+      const lista = dados.map(r=>({
+        atividade: String(r[0]||"").trim(),
+        cliente:   String(r[1]||"").trim(),
+        area:      String(r[2]||"").trim(),
+        responsavel: String(r[3]||"").trim(),
+        tipo:      String(r[4]||"mensal").trim().toLowerCase()==="anual"?"anual":"mensal",
+        tipoPrazo: String(r[5]||"fixo").trim().toLowerCase()==="util"?"util":"fixo",
+        dia:       Number(r[6])||1,
+        mes:       r[7]?Number(r[7])||null:null,
+        seNaoUtil: String(r[8]||"recuar").trim().toLowerCase()==="avancar"?"avancar":"recuar",
+        recorrenciaAnual: String(r[9]||"nao").trim().toLowerCase()==="sim",
+      }));
+      setSaving(true);
+      const novos = await insertPadraoEmLote(lista);
+      setPadrao([...padrao,...novos]);
+      alert(`✅ ${novos.length} padrão(ões) importado(s) com sucesso!`);
+    }catch(e){alert("Erro ao importar: "+e.message);}
+    setSaving(false);
+    e.target.value="";
+  }
   async function handleDeletePadraoEmLote(){setSaving(true);try{await deletePadraoEmLote(selectedPadrao);setPadrao(padrao.filter(p=>!selectedPadrao.includes(p.id)));setSelectedPadrao([]);setShowConfirmDelPadrao(false);}catch(e){alert("Erro: "+e.message);}setSaving(false);}
   function toggleSelectPadrao(id){setSelectedPadrao(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);}
   function toggleSelectAllPadrao(){setSelectedPadrao(selectedPadrao.length===padraoFiltrado.length?[]:padraoFiltrado.map(p=>p.id));}
@@ -352,7 +420,12 @@ export default function App(){
         <div style={{marginLeft:"auto",display:"flex",gap:8,flexWrap:"wrap"}}>
           <select value={padraoFiltro} onChange={e=>setPadraoFiltro(e.target.value)} style={{...inp,width:"auto"}}>{["Todos",...nomes.clientes].map(c=><option key={c}>{c}</option>)}</select>
           <select value={padraoTipoFiltro} onChange={e=>setPadraoTipoFiltro(e.target.value)} style={{...inp,width:"auto"}}>{["Todos","mensal","anual"].map(c=><option key={c}>{c}</option>)}</select>
-          <button onClick={()=>setShowImportar(true)} style={{padding:"6px 12px",fontSize:13,borderRadius:7,border:`1.5px solid ${C.primary3}`,background:"transparent",color:C.primary,cursor:"pointer",fontWeight:500}}>📥 Importar em lote</button>
+          <button onClick={baixarModeloExcel} style={{padding:"6px 12px",fontSize:13,borderRadius:7,border:`1.5px solid ${C.primary3}`,background:"transparent",color:C.primary,cursor:"pointer",fontWeight:500}}>📥 Baixar modelo Excel</button>
+          <label style={{padding:"6px 12px",fontSize:13,borderRadius:7,border:`1.5px solid ${C.primary3}`,background:"transparent",color:C.primary,cursor:"pointer",fontWeight:500}}>
+            📤 Importar Excel
+            <input type="file" accept=".xlsx,.xls" onChange={handleImportarExcel} style={{display:"none"}}/>
+          </label>
+          <button onClick={()=>setShowImportar(true)} style={{padding:"6px 12px",fontSize:13,borderRadius:7,border:`1.5px solid ${C.primary3}`,background:"transparent",color:C.primary,cursor:"pointer",fontWeight:500}}>📋 Importar manual</button>
           <button onClick={()=>setShowAddPadrao(true)} style={{padding:"6px 14px",fontSize:13,borderRadius:7,border:"none",background:C.primary,color:"#fff",cursor:"pointer",fontWeight:600}}>+ Novo padrão</button>
         </div>
       </div>
@@ -549,6 +622,20 @@ export default function App(){
     {editTask&&<Modal onClose={()=>setEditTask(null)} title="Editar tarefa">{TF(editTask,setEditTask)}<div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:16}}><BtnD onClick={()=>handleDeleteTask(editTask.id)}>Excluir</BtnD><BtnP onClick={saveEdit}>{saving?"Salvando...":"Salvar"}</BtnP></div></Modal>}
     {showAdd&&<Modal onClose={()=>setShowAdd(false)} title="Nova tarefa">{TF(newTask,setNewTask)}<div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}><BtnP onClick={addTask} disabled={!newTask.atividade}>{saving?"Adicionando...":"Adicionar"}</BtnP></div></Modal>}
     {editPadrao&&<Modal onClose={()=>setEditPadrao(null)} title="Editar padrão">{PF(editPadrao,setEditPadrao)}<div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:16}}><BtnD onClick={()=>handleDeletePadrao(editPadrao.id)}>Excluir</BtnD><BtnP onClick={savePadrao}>Salvar</BtnP></div></Modal>}
-    {showAddPadrao&&<Modal onClose={()=>setShowAddPadrao(false)} title="Novo padrão">{PF(newPadrao,setNewPadrao)}<div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}><BtnP onClick={addPadrao} disabled={!newPadrao.atividade}>Adicionar</BtnP></div></Modal>}
+    {showAddPadrao&&<Modal onClose={()=>{setShowAddPadrao(false);setReplicarTodos(false);}} title="Novo padrão">
+      {PF(newPadrao,setNewPadrao)}
+      <div style={{borderTop:`1px solid ${C.primary3}`,marginTop:12,paddingTop:12}}>
+        <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",fontSize:13,fontWeight:500,color:"#000"}}>
+          <input type="checkbox" checked={replicarTodos} onChange={e=>setReplicarTodos(e.target.checked)} style={{width:16,height:16,accentColor:C.primary}}/>
+          <span>🔁 Replicar para <strong>todos os clientes</strong> cadastrados (responsável ficará em branco)</span>
+        </label>
+        {replicarTodos&&<div style={{marginTop:8,fontSize:12,color:C.dark,background:C.primary5,borderRadius:6,padding:"8px 12px"}}>
+          Serão criados <strong>{nomes.clientes.length}</strong> padrão(ões) — um para cada cliente: {nomes.clientes.join(", ")}
+        </div>}
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}>
+        <BtnP onClick={addPadrao} disabled={!newPadrao.atividade}>{saving?"Salvando...":"Adicionar"}</BtnP>
+      </div>
+    </Modal>}
   </div>;
 }
